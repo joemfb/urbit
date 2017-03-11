@@ -279,9 +279,9 @@
           default: return _nest_sint(van, sut, tel, ref, seg, reg, gil);
 
           case c3__atom:
-          case c3__cell:
+            break;
 
-          {
+          case c3__cell: {
             u3_noun lit = u3qdi_tap(p_sut, u3_nul);
             u3_noun l = u3_nul;
             u3_noun r = u3_nul;
