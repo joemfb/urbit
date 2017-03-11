@@ -183,20 +183,6 @@
     }
   }
 
-  static void
-  _lose_set(u3_noun a)
-  {
-    u3_noun l_a, n_a, r_a;
-
-    if ( (c3n == u3r_trel(a, &n_a, &l_a, &r_a)) ) {
-      return;
-    }
-
-    u3z(n_a);
-    _lose_set(l_a);
-    _lose_set(r_a);
-  }
-
   static u3_noun
   _nest_dext_in(u3_noun van,
                 u3_noun sut,
@@ -283,38 +269,57 @@
 
           case c3__cell: {
             u3_noun lit = u3qdi_tap(p_sut, u3_nul);
-            u3_noun l = u3_nul;
-            u3_noun r = u3_nul;
+            u3_noun lit2 = lit;
+
+            if ( u3_nul == lit ) {
+              break;
+            }
+
+            u3_noun l = u3h(u3t(u3h(lit)));
+            u3_noun r = u3t(u3t(u3h(lit)));
+            c3_t l_match = 1;
+            c3_t r_match = 1;
+
+            lit = u3t(lit);
 
             while ( u3_nul != lit ) {
-              u3_noun i_lit = u3h(lit);
-
-              if ( c3__cell != u3h(i_lit) ) {
-                _lose_set(l);
-                _lose_set(r);
-                // TODO: goto?
-                l = u3_nul;
-                r = u3_nul;
+              if ( c3__cell != u3h(u3h(lit)) ) {
+                l_match = r_match = 0;
                 break;
               }
 
-              u3_noun t_i_lit = u3t(i_lit);
-              l = u3qdi_put(l, u3k(u3h(t_i_lit)));
-              r = u3qdi_put(r, u3k(u3t(t_i_lit)));
+              l_match = l_match && _(u3r_sing(l, u3h(u3t(u3h(lit)))));
+              r_match = r_match && _(u3r_sing(r, u3t(u3t(u3h(lit)))));
+
+              if ( !l_match && !r_match ) {
+                break;
+              }
+
               lit = u3t(lit);
             }
 
-            if ( 1 == u3qdi_wyt(l) ) {
-              sut = u3nt(c3__cell, u3h(l), u3nc(c3__fork, r));
-              return _nest_dext_in(van, sut, tel, ref, seg, reg, gil);
-            }
-            else if ( 1 == u3qdi_wyt(r) ) {
-              sut = u3nt(c3__cell, u3nc(c3__fork, l), u3h(r));
+            if ( l_match || r_match ) {
+              u3_noun haf = u3_nul;
+
+              while ( u3_nul != lit2 ) {
+                if ( l_match ) {
+                  haf = u3qdi_put(haf, u3k(u3t(u3t(u3h(lit2)))));
+                } else {
+                  haf = u3qdi_put(haf, u3k(u3h(u3t(u3h(lit2)))));
+                }
+
+                lit2 = u3t(lit2);
+              }
+
+              if ( l_match ) {
+                sut = u3nt(c3__cell, l, u3nc(c3__fork, haf));
+              } else {
+                sut = u3nt(c3__cell, u3nc(c3__fork, haf), r);
+              }
+
               return _nest_dext_in(van, sut, tel, ref, seg, reg, gil);
             }
 
-            _lose_set(l);
-            _lose_set(r);
             break;
           }
 
