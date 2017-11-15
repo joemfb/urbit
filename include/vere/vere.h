@@ -92,20 +92,6 @@
         u3_hbod*         bod_u;             //  body (one part)
       } u3_hrep;
 
-    /* u3_hcon: incoming http connection.
-    */
-      typedef struct _u3_hcon {
-        uv_tcp_t         wax_u;             //  event handler state
-        c3_w             coq_l;             //  connection number
-        c3_w             seq_l;             //  next request number
-        struct _u3_http* htp_u;             //  backlink to server
-        struct _u3_hcon* nex_u;             //  next in server's list
-        struct _u3_hreq* ruc_u;             //  request under construction
-        struct _u3_hreq* req_u;             //  exit of request queue
-        struct _u3_hreq* qer_u;             //  entry of request queue
-        void*            par_u;             //  struct http_parser *
-      } u3_hcon;
-
     /* u3_http: http server.
     */
       typedef struct _u3_http {
@@ -153,6 +139,22 @@
         void*           rio_u;              //  struct BIO* for read
         void*           wio_u;              //  struct BIO* for write
       } u3_sslx;
+
+    /* u3_hcon: incoming http connection.
+    */
+      typedef struct _u3_hcon {
+        uv_tcp_t         wax_u;             //  event handler state
+        u3_sslx          ssl;               //  ssl state
+        u3_csat          sat_e;             //  connection state
+        c3_w             coq_l;             //  connection number
+        c3_w             seq_l;             //  next request number
+        struct _u3_http* htp_u;             //  backlink to server
+        struct _u3_hcon* nex_u;             //  next in server's list
+        struct _u3_hreq* ruc_u;             //  request under construction
+        struct _u3_hreq* req_u;             //  exit of request queue
+        struct _u3_hreq* qer_u;             //  entry of request queue
+        void*            par_u;             //  struct http_parser *
+      } u3_hcon;
 
     /* u3_ccon: outgoing http connection.
     */
@@ -580,7 +582,8 @@
         u3_behn    teh_u;                   //  behn timer
         c3_o       liv;                     //  if u3_no, shut down
         c3_i       xit_i;                   //  exit code for shutdown
-        void*      ssl_u;                   //  struct SSL_CTX*
+        void*      ssl_u;                   //  struct SSL_CTX* (outbound)
+        void*      tls_u;                   //  struct SSL_CTX* (inbound)
       } u3_host;                            //  host == computer == process
 
 #     define u3L  u3_Host.lup_u             //  global event loop

@@ -19,14 +19,27 @@
 #include <termios.h>
 #include <term.h>
 
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/rand.h>
+
 #include "../outside/jhttp/http_parser.h"   // Joyent HTTP
 #include "all.h"
 #include "vere/vere.h"
 
-static void _http_request(u3_hreq* req_u);
-static void _http_request_dead(u3_hreq* req_u);
-static void _http_conn_dead(u3_hcon *hon_u);
-static u3_hreq* _http_req_new(u3_hcon* hon_u);
+/* Forward declarations.
+*/
+  static void _http_request(u3_hreq* req_u);
+  static void _http_conn_cryp_hurr(u3_hcon* hon_u, int rev);
+  static void _http_conn_cryp_rout(u3_hcon* hon_u);
+  static void _http_request_dead(u3_hreq* req_u);
+  static void _http_conn_dead(u3_hcon* hon_u);
+  static void _http_conn_kick(u3_hcon* hon_u);
+  static void _http_conn_kick_handshake(u3_hcon* hon_u);
+  static void _http_conn_kick_read_clyr(u3_hcon* hon_u);
+  static void _http_conn_kick_read_cryp(u3_hcon* hon_u);
+  static void _http_conn_cryp_pull(u3_hcon* hon_u);
+  static u3_hreq* _http_req_new(u3_hcon* hon_u);
 
 /* _http_alloc(): libuv buffer allocator.
 */
@@ -146,12 +159,12 @@ _http_write_cb(uv_write_t* wri_u, c3_i sas_i)
 /* _http_respond_buf(): write back to http.
 */
 static void
-_http_respond_buf(u3_hreq* req_u, uv_buf_t buf_u)
+_http_respond_buf(u3_hcon* hon_u, uv_buf_t buf_u)
 {
   _u3_write_t* ruq_u;
 
   // don't respond to a dead connection
-  if ( uv_is_closing((uv_handle_t*) &(req_u->hon_u->wax_u)) ) {
+  if ( uv_is_closing((uv_handle_t*) &(hon_u->wax_u)) ) {
       free(buf_u.base);
       return;
   }
@@ -161,12 +174,12 @@ _http_respond_buf(u3_hreq* req_u, uv_buf_t buf_u)
   ruq_u->buf_y = (c3_y*)buf_u.base;
 
   if ( 0 != uv_write(&ruq_u->wri_u,
-                     (uv_stream_t*)&(req_u->hon_u->wax_u),
+                     (uv_stream_t*)&(hon_u->wax_u),
                      &buf_u, 1,
                      _http_write_cb) )
   {
     uL(fprintf(uH, "respond: ERROR\n"));
-    _http_conn_dead(req_u->hon_u);
+    _http_conn_dead(hon_u);
   }
 }
 
@@ -186,7 +199,7 @@ _http_send_body(u3_hreq *req_u,
     memcpy(buf_y, rub_u->hun_y, rub_u->len_w);
     buf_u = uv_buf_init((c3_c*)buf_y, rub_u->len_w);
   }
-  _http_respond_buf(req_u, buf_u);
+  _http_respond_buf(req_u->hon_u, buf_u);
 }
 
 /* _http_respond_body(): attach response body.
@@ -587,7 +600,7 @@ _http_conn_read_cb(uv_stream_t* tcp_u,
   u3_lo_open();
   {
     if ( siz_w == UV_EOF ) {
-      _http_conn_dead(hon_u);      
+      _http_conn_dead(hon_u);
     } else if ( siz_w < 0 ) {
       uL(fprintf(uH, "http: read: %s\n", uv_strerror(siz_w)));
       _http_conn_dead(hon_u);
@@ -609,35 +622,117 @@ _http_conn_read_cb(uv_stream_t* tcp_u,
   u3_lo_shut(c3y);
 }
 
+/* _cttp_ccon_kick_read_cryp_cb()
+*/
+/*
+ * `nread` (siz_w) is > 0 if there is data available, UV_EOF if libuv is
+ * done reading for now, or < 0 on error.
+ *
+ * The callee is responsible for closing the stream when an error happens
+ * by calling uv_close(). Trying to read from the stream again is undefined.
+ *
+ * The callee is responsible for freeing the buffer, libuv does not reuse it.
+ * The buffer may be a null buffer (where buf->base=NULL and buf->len=0) on
+ * error.
+ */
+static void
+_http_conn_read_cryp_cb(uv_stream_t* tcp_u,
+                        ssize_t      siz_w,
+                        const uv_buf_t *  buf_u)
+{
+  u3_hcon* hon_u = (u3_hcon*)(void*) tcp_u;
+
+  u3_lo_open();
+  {
+    if ( siz_w == UV_EOF ) {
+      _http_conn_dead(hon_u);
+    }
+    else if ( siz_w < 0 ) {
+      uL(fprintf(uH, "http: read 2: %s\n", uv_strerror(siz_w)));
+      _http_conn_dead(hon_u);
+    }
+    else {
+      // TODO:
+      // THIS MAKES TED VERY UNCOMFORTABLE
+      // u3_creq* ceq_u = coc_u->ceq_u;
+
+      // if ( !ceq_u ) {           //  spurious input
+      //   uL(fprintf(uH, "http: response to no request\n"));
+      // }
+      // else {
+        BIO_write(hon_u->ssl.rio_u, (c3_c*)buf_u->base, siz_w);
+        _http_conn_cryp_pull(hon_u);
+
+        // _cttp_ccon_cryp_pull(coc_u);
+      // }
+    }
+    if ( buf_u->base ) {
+      free(buf_u->base);
+    }
+  }
+  u3_lo_shut(c3y);
+}
+
+/* _cttp_ccon_cryp_pull(): pull cleartext data off of the SSL buffer
+ */
+static void
+_http_conn_cryp_pull(u3_hcon* hon_u)
+{
+  if ( SSL_is_init_finished(hon_u->ssl.ssl_u) ) {
+    static c3_c buf[1<<14];
+    c3_i r;
+    while ( 0 < (r = SSL_read(hon_u->ssl.ssl_u, &buf, sizeof(buf))) ) {
+      // TODO
+      // _cttp_ccon_pars_shov(coc_u, &buf, r);
+    }
+    if ( 0 >= r ) {
+      _http_conn_cryp_hurr(hon_u, r);
+    }
+  }
+  else {
+    //  not connected
+    ERR_clear_error();
+    c3_i r = SSL_connect(hon_u->ssl.ssl_u);
+    if ( 0 > r ) {
+      _http_conn_cryp_hurr(hon_u, r);
+    }
+    else {
+      hon_u->sat_e = u3_csat_cryp;
+      _http_conn_kick(hon_u);
+    }
+  }
+  // _cttp_ccon_kick_write_cryp(coc_u);
+}
+
+
 /* _http_conn_new(): create http connection.
 */
 static void
 _http_conn_new(u3_http *htp_u)
 {
   u3_hcon *hon_u = c3_malloc(sizeof(*hon_u));
+  hon_u->sat_e = u3_csat_dead;
 
   uv_tcp_init(u3L, &hon_u->wax_u);
 
   c3_w ret_w;
   ret_w = uv_accept((uv_stream_t*)&htp_u->wax_u,
                     (uv_stream_t*)&hon_u->wax_u);
-  if (ret_w == UV_EOF)
-  {
-    uL(fprintf(uH, "http: accept: ERROR\n"));
 
+  if (ret_w == UV_EOF) {
+    uL(fprintf(uH, "http: accept: ERROR\n"));
     uv_close((uv_handle_t*)&hon_u->wax_u, _http_conn_free_early);
   }
   else {
+    // TODO: move printf to req_new, or just remove
+#if 0
     struct sockaddr_in name;
     int namelen = sizeof(name);
     int ret = 0;
     if (0 != (ret = uv_tcp_getpeername(&hon_u->wax_u, (struct sockaddr*) &name, &namelen))) {
       uL(fprintf(uH, "failed to get peer name: %s\r\n", uv_strerror(ret)));
     }
-
-    uv_read_start((uv_stream_t*)&hon_u->wax_u,
-                  _http_alloc,
-                  _http_conn_read_cb);
+#endif
 
     hon_u->coq_l = htp_u->coq_l++;
     hon_u->seq_l = 1;
@@ -650,10 +745,141 @@ _http_conn_new(u3_http *htp_u)
     hon_u->nex_u = htp_u->hon_u;
     htp_u->hon_u = hon_u;
 
+    if (htp_u->sec == c3y) {
+      hon_u->sat_e = u3_csat_crop;
+      // TODO
+      //_http_conn_kick(hon_u);
+      _http_conn_kick_handshake(hon_u);
+    } else {
+      hon_u->sat_e = u3_csat_clyr;
+      // TODO
+      //_http_conn_kick(hon_u);
+      _http_conn_kick_read_clyr(hon_u);
+    }
+
+    // TODO: move elsewhere
     hon_u->par_u = c3_malloc(sizeof(struct http_parser));
     http_parser_init(hon_u->par_u, HTTP_REQUEST);
     ((struct http_parser *)(hon_u->par_u))->data = hon_u;
   }
+}
+
+// see _cttp_ccon_kick_handshake
+static void
+_http_conn_kick_handshake(u3_hcon *hon_u)
+{
+  uL(fprintf(uH, "trying TLS stuff\n"));
+  hon_u->ssl.ssl_u = SSL_new(u3_Host.tls_u);
+  c3_assert(hon_u->ssl.ssl_u);
+
+  hon_u->ssl.rio_u = BIO_new(BIO_s_mem());
+  c3_assert(hon_u->ssl.rio_u);
+
+  hon_u->ssl.wio_u = BIO_new(BIO_s_mem());
+  c3_assert(hon_u->ssl.wio_u);
+
+  BIO_set_nbio(hon_u->ssl.rio_u, 1);
+  BIO_set_nbio(hon_u->ssl.wio_u, 1);
+
+  SSL_set_bio(hon_u->ssl.ssl_u,
+              hon_u->ssl.rio_u,
+              hon_u->ssl.wio_u);
+
+  SSL_set_connect_state(hon_u->ssl.ssl_u);
+
+  c3_i r = SSL_do_handshake(hon_u->ssl.ssl_u);
+  if ( 0 > r ) {
+    _http_conn_cryp_hurr(hon_u, r);
+  }
+  else {
+   hon_u->sat_e = u3_csat_cryp;
+   // TODO: wind state machine
+    // _cttp_ccon_kick(coc_u);
+  }
+
+  hon_u->sat_e = u3_csat_sing;
+  // TODO: wind state machine
+  // _cttp_ccon_kick(coc_u);
+}
+
+static void
+_http_conn_cryp_hurr(u3_hcon* hon_u, int rev)
+{
+  u3_sslx* ssl = &hon_u->ssl;
+  c3_i err = SSL_get_error(ssl->ssl_u, rev);
+
+  switch ( err ) {
+    default:
+    // TODO:
+      //_cttp_ccon_waste(coc_u, "ssl lost");
+      break;
+    case SSL_ERROR_NONE:
+    case SSL_ERROR_ZERO_RETURN:
+      break;
+    case SSL_ERROR_WANT_WRITE: //  XX maybe bad
+      break;
+    case SSL_ERROR_WANT_READ:
+      _http_conn_cryp_rout(hon_u);
+      break;
+    case SSL_ERROR_WANT_CONNECT:
+      fprintf(stderr, "http: want connect: %p\r\n", hon_u->ssl.ssl_u);
+      break;
+    case SSL_ERROR_WANT_ACCEPT:
+      fprintf(stderr, "http: want accept: %p\r\n", hon_u->ssl.ssl_u);
+      break;
+    case SSL_ERROR_WANT_X509_LOOKUP:
+      fprintf(stderr, "http: want x509 lookup: %p\r\n", hon_u->ssl.ssl_u);
+      break;
+    case SSL_ERROR_SYSCALL:
+      fprintf(stderr, "http: syscall: %p\r\n", hon_u->ssl.ssl_u);
+      break;
+    case SSL_ERROR_SSL:
+      fprintf(stderr, "http: error_ssl: %p\r\n", hon_u->ssl.ssl_u);
+      c3_i err;
+      while ( 0 != (err = ERR_get_error()) ) {
+        c3_c ero[500];
+        ERR_error_string_n(err, ero, 500);
+        fprintf(stderr, "error code: %x\r\n%s\r\n", err, ero);
+      }
+      break;
+  }
+}
+
+/* _cttp_ccon_cryp_rout: write the SSL buffer to the network
+ */
+static void
+_http_conn_cryp_rout(u3_hcon* hon_u)
+{
+  uv_buf_t buf_u;
+  c3_i bur_i;
+
+  {
+    c3_y* buf_y = c3_malloc(1<<14);
+    while ( 0 < (bur_i = BIO_read(hon_u->ssl.wio_u, buf_y, 1<<14)) ) {
+      buf_u = uv_buf_init((c3_c*)buf_y, bur_i);
+      _http_respond_buf(hon_u, buf_u);
+    }
+  }
+}
+
+/* _cttp_ccon_kick_read_clyr(): start reading on insecure socket.
+*/
+static void
+_http_conn_kick_read_clyr(u3_hcon* hon_u)
+{
+  uv_read_start((uv_stream_t*)&hon_u->wax_u,
+                _http_alloc,
+                _http_conn_read_cb);
+}
+
+/* _cttp_ccon_kick_read_cryp(): start reading on secure socket.
+*/
+static void
+_http_conn_kick_read_cryp(u3_hcon* hon_u)
+{
+  uv_read_start((uv_stream_t*)&hon_u->wax_u,
+                _http_alloc,
+                _http_conn_read_cryp_cb);
 }
 
 /* _http_req_find(): find http request by sequence.
@@ -891,7 +1117,7 @@ _http_request(u3_hreq* req_u)
       _(req_u->hon_u->htp_u->lop) ?
         c3__chis :
       c3__this;
-    
+
     u3v_plan(pox,
                u3nq(typ,
                     req_u->hon_u->htp_u->sec,
@@ -1191,6 +1417,109 @@ u3_http_io_init()
   }
 
   u3_Host.ctp_u.coc_u = 0;
+
+  {
+    c3_i rad;
+    c3_y buf[4096];
+
+    u3_Host.ctp_u.coc_u = 0;
+
+    SSL_library_init();
+    SSL_load_error_strings();
+
+    u3_Host.tls_u = SSL_CTX_new(TLSv1_2_server_method());
+    // SSL_CTX_set_options(u3S, SSL_OP_NO_SSLv2);
+    SSL_CTX_set_verify(u3_Host.tls_u, SSL_VERIFY_NONE, NULL);
+    SSL_CTX_set_default_verify_paths(u3_Host.tls_u);
+
+    SSL_CTX_set_session_cache_mode(u3_Host.tls_u, SSL_SESS_CACHE_OFF);
+    SSL_CTX_set_cipher_list(u3_Host.tls_u,
+                            "ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:"
+                            "ECDH+AES128:DH+AES:ECDH+3DES:DH+3DES:RSA+AESGCM:"
+                            "RSA+AES:RSA+3DES:!aNULL:!MD5:!DSS");
+
+
+
+    c3_c pub_c[2048];
+    c3_c pir_c[2048];
+    c3_i ret_i;
+
+    ret_i = snprintf(pub_c, 2048, "%s/.urb/tls/certificate.pem", u3_Host.dir_c);
+    c3_assert(ret_i < 2048);
+    ret_i = snprintf(pir_c, 2048, "%s/.urb/tls/private.pem", u3_Host.dir_c);
+    c3_assert(ret_i < 2048);
+
+    // TODO: SSL_CTX_use_certificate_chain_file ?
+    if (SSL_CTX_use_certificate_file(u3_Host.tls_u, pub_c, SSL_FILETYPE_PEM) <= 0) {
+      uL(fprintf(uH, "https: failed to load certificate\n"));
+      c3_assert(0);
+    }
+
+    if (SSL_CTX_use_PrivateKey_file(u3_Host.tls_u, pir_c, SSL_FILETYPE_PEM) <= 0 ) {
+      uL(fprintf(uH, "https: failed to load private key\n"));
+      c3_assert(0);
+    }
+
+    // RAND_status, at least on OS X, never returns true.
+    // 4096 bytes should be enough entropy for anyone, right?
+    rad = open("/dev/urandom", O_RDONLY);
+    if ( 4096 != read(rad, &buf, 4096) ) {
+      perror("rand-seed");
+      exit(1);
+    }
+    RAND_seed(buf, 4096);
+  }
+}
+
+/* _cttp_ccon_kick(): start appropriate I/O on client connection.
+*/
+static void
+_http_conn_kick(u3_hcon* hon_u)
+{
+  // if ( 0 == hon_u->ceq_u ) {
+  //   return;
+  // }
+
+  switch ( hon_u->sat_e ) {
+    default: c3_assert(0);
+
+    case u3_csat_dead: {
+      // _cttp_ccon_kick_resolve(hon_u);
+      break;
+    }
+    case u3_csat_addr: {
+      // _cttp_ccon_kick_connect(coc_u);
+      break;
+    }
+    case u3_csat_crop: {
+      _http_conn_kick_handshake(hon_u);
+      break;
+    }
+    case u3_csat_sing: {
+      // _cttp_ccon_kick_read_cryp(coc_u);
+      // _cttp_ccon_cryp_pull(coc_u);
+      break;
+    }
+    case u3_csat_cryp: {
+      // _cttp_ccon_fill(coc_u);
+
+      // if ( coc_u->rub_u ) {
+      //   _cttp_ccon_kick_write_cryp(coc_u);
+      // }
+      // _cttp_ccon_cryp_pull(coc_u);
+      break;
+    }
+    case u3_csat_clyr: {
+      // TODO: something
+      // _cttp_ccon_fill(coc_u);
+
+      // if ( coc_u->rub_u ) {
+      //   _cttp_ccon_kick_write(coc_u);
+      // }
+      _http_conn_kick_read_clyr(hon_u);
+      break;
+    }
+  }
 }
 
 /* u3_http_io_talk(): bring up listener.
@@ -1220,4 +1549,32 @@ void
 u3_http_io_exit(void)
 {
   _http_release_ports_file(u3_Host.dir_c);
+  SSL_CTX_free(u3_Host.tls_u);
 }
+
+
+/*
+
+u3_http_io_talk
+_http_start
+_http_listen_cb
+_http_conn_new
+
+u3_csat state machine:
+
+- starts out: u3_csat_dead
+- after address: u3_csat_addr
+- if not TLS: u3_csat_clyr
+
+- if TLS, after handshake: u3_csat_crop
+
+ typedef enum {
+        u3_csat_dead = 0,                   //  connection dead
+        u3_csat_addr = 1,                   //  connection addressed
+        u3_csat_clyr = 2,                   //  connection open in cleartext
+        u3_csat_crop = 3,                   //  connection open, ssl needs hs
+        u3_csat_sing = 4,                   //  connection handshaking ssl
+        u3_csat_cryp = 5,                   //  connection open, ssl open
+      } u3_csat;
+
+*/
