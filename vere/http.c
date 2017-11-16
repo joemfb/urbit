@@ -258,8 +258,6 @@ _http_respond_request(u3_hreq* req_u,
   _http_respond_headers(req_u, rep_u->hed_u);
   _http_heds_free(rep_u->hed_u);
 
-  //  Why is this necessary?  Why we can't send a naked error?  Waah.
-  //
   if ( !rep_u->bod_u ) {
     snprintf(buf_c, 81, "HTTP error %d.\r\n", rep_u->sas_w);
     rep_u->bod_u = _http_bod(strlen(buf_c), (c3_y*) buf_c);
@@ -606,20 +604,29 @@ _http_conn_read_cb(uv_stream_t* tcp_u,
       _http_conn_dead(hon_u);
     }
     else {
-      if ( siz_w != http_parser_execute(hon_u->par_u,
-                                        &_http_settings,
-                                        (c3_c*)buf_u->base,
-                                        siz_w) )
-      {
-        uL(fprintf(uH, "http: parse error\n"));
-        _http_conn_dead(hon_u);
-      }
+      _http_conn_pars_shov(hon_u, siz_w, buf_u->base);
     }
     if ( buf_u->base ) {
       free(buf_u->base);
     }
   }
   u3_lo_shut(c3y);
+}
+
+/* _http_conn_pars_shov(): shove some bytes into the http parser.
+ * TODO: argument order discrepancy with cttp
+*/
+static void
+_http_conn_pars_shov(u3_hcon* hon_u, ssize_t siz_w, void* buf)
+{
+  if ( siz_w != http_parser_execute(hon_u->par_u,
+                                    &_http_settings,
+                                    (c3_c*)buf,
+                                    siz_w) )
+  {
+    uL(fprintf(uH, "http: parse error\n"));
+    _http_conn_dead(hon_u);
+  }
 }
 
 /* _cttp_ccon_kick_read_cryp_cb()
@@ -682,8 +689,7 @@ _http_conn_cryp_pull(u3_hcon* hon_u)
     static c3_c buf[1<<14];
     c3_i r;
     while ( 0 < (r = SSL_read(hon_u->ssl.ssl_u, &buf, sizeof(buf))) ) {
-      // TODO
-      // _cttp_ccon_pars_shov(coc_u, &buf, r);
+      _http_conn_pars_shov(hon_u, siz_w, buf);
     }
     if ( 0 >= r ) {
       _http_conn_cryp_hurr(hon_u, r);
@@ -701,9 +707,16 @@ _http_conn_cryp_pull(u3_hcon* hon_u)
       _http_conn_kick(hon_u);
     }
   }
-  // _cttp_ccon_kick_write_cryp(coc_u);
+  //_http_conn_kick_write_cryp(hon_u);
 }
 
+/* _http_conn_kick_write_cryp(): TODO
+*/
+static void
+_http_conn_kick_write_cryp(u3_hcon* hon_u)
+{
+  
+}
 
 /* _http_conn_new(): create http connection.
 */
@@ -745,17 +758,8 @@ _http_conn_new(u3_http *htp_u)
     hon_u->nex_u = htp_u->hon_u;
     htp_u->hon_u = hon_u;
 
-    if (htp_u->sec == c3y) {
-      hon_u->sat_e = u3_csat_crop;
-      // TODO
-      //_http_conn_kick(hon_u);
-      _http_conn_kick_handshake(hon_u);
-    } else {
-      hon_u->sat_e = u3_csat_clyr;
-      // TODO
-      //_http_conn_kick(hon_u);
-      _http_conn_kick_read_clyr(hon_u);
-    }
+    hon_u->sat_e = (htp_u->sec == c3y)? u3_csat_crop : u3_csat_clyr;
+    _http_conn_kick(hon_u);
 
     // TODO: move elsewhere
     hon_u->par_u = c3_malloc(sizeof(struct http_parser));
