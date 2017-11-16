@@ -39,6 +39,8 @@
   static void _http_conn_kick_read_clyr(u3_hcon* hon_u);
   static void _http_conn_kick_read_cryp(u3_hcon* hon_u);
   static void _http_conn_cryp_pull(u3_hcon* hon_u);
+  static void _http_conn_kick_write_buf(u3_hcon* hon_u, uv_buf_t buf_u);
+  static void _http_conn_pars_shov(u3_hcon* hon_u, ssize_t siz_w, void* buf);
   static u3_hreq* _http_req_new(u3_hcon* hon_u);
 
 /* _http_alloc(): libuv buffer allocator.
@@ -161,25 +163,22 @@ _http_write_cb(uv_write_t* wri_u, c3_i sas_i)
 static void
 _http_respond_buf(u3_hcon* hon_u, uv_buf_t buf_u)
 {
-  _u3_write_t* ruq_u;
-
-  // don't respond to a dead connection
-  if ( uv_is_closing((uv_handle_t*) &(hon_u->wax_u)) ) {
-      free(buf_u.base);
-      return;
+  if (!hon_u->htp_u->sec) {
+    _http_conn_kick_write_buf(hon_u, buf_u);
+    return;
   }
 
-  ruq_u = (_u3_write_t*) c3_malloc(sizeof(_u3_write_t));
+  if ( NULL == hon_u->ssl.ssl_u ) {
+    c3_assert(!"ssl_u is null\r\n");
+  }
+  if ( !SSL_is_init_finished(hon_u->ssl.ssl_u)) {
+    return;
+  }
 
-  ruq_u->buf_y = (c3_y*)buf_u.base;
-
-  if ( 0 != uv_write(&ruq_u->wri_u,
-                     (uv_stream_t*)&(hon_u->wax_u),
-                     &buf_u, 1,
-                     _http_write_cb) )
-  {
-    uL(fprintf(uH, "respond: ERROR\n"));
-    _http_conn_dead(hon_u);
+  c3_i r;
+  if ( 0 > (r = SSL_write(hon_u->ssl.ssl_u, buf_u.base, buf_u.len)) ) {
+    _http_conn_cryp_hurr(hon_u, r);
+    _http_conn_cryp_rout(hon_u);
   }
 }
 
@@ -689,21 +688,25 @@ _http_conn_cryp_pull(u3_hcon* hon_u)
     static c3_c buf[1<<14];
     c3_i r;
     while ( 0 < (r = SSL_read(hon_u->ssl.ssl_u, &buf, sizeof(buf))) ) {
-      _http_conn_pars_shov(hon_u, siz_w, buf);
+      _http_conn_pars_shov(hon_u, sizeof(buf), buf);
     }
     if ( 0 >= r ) {
       _http_conn_cryp_hurr(hon_u, r);
     }
   }
   else {
-    //  not connected
+    uL(fprintf(uH, "TLS cryp_pull !is_finished\n"));
     ERR_clear_error();
-    c3_i r = SSL_connect(hon_u->ssl.ssl_u);
+    c3_i r = SSL_accept(hon_u->ssl.ssl_u);
     if ( 0 > r ) {
+      uL(fprintf(uH, "TLS accept r<0 (hurr)\n"));
       _http_conn_cryp_hurr(hon_u, r);
     }
     else {
+      uL(fprintf(uH, "TLS accept r>=0 (CRYP)\n"));
       hon_u->sat_e = u3_csat_cryp;
+      // TODO:
+      // _http_conn_cryp_rout(hon_u);
       _http_conn_kick(hon_u);
     }
   }
@@ -712,11 +715,11 @@ _http_conn_cryp_pull(u3_hcon* hon_u)
 
 /* _http_conn_kick_write_cryp(): TODO
 */
-static void
-_http_conn_kick_write_cryp(u3_hcon* hon_u)
-{
-  
-}
+// static void
+// _http_conn_kick_write_cryp(u3_hcon* hon_u)
+// {
+
+// }
 
 /* _http_conn_new(): create http connection.
 */
@@ -758,7 +761,7 @@ _http_conn_new(u3_http *htp_u)
     hon_u->nex_u = htp_u->hon_u;
     htp_u->hon_u = hon_u;
 
-    hon_u->sat_e = (htp_u->sec == c3y)? u3_csat_crop : u3_csat_clyr;
+    hon_u->sat_e = (htp_u->sec == c3y) ? u3_csat_crop : u3_csat_clyr;
     _http_conn_kick(hon_u);
 
     // TODO: move elsewhere
@@ -772,7 +775,7 @@ _http_conn_new(u3_http *htp_u)
 static void
 _http_conn_kick_handshake(u3_hcon *hon_u)
 {
-  uL(fprintf(uH, "trying TLS stuff\n"));
+  uL(fprintf(uH, "begin TLS handshake\n"));
   hon_u->ssl.ssl_u = SSL_new(u3_Host.tls_u);
   c3_assert(hon_u->ssl.ssl_u);
 
@@ -789,21 +792,9 @@ _http_conn_kick_handshake(u3_hcon *hon_u)
               hon_u->ssl.rio_u,
               hon_u->ssl.wio_u);
 
-  SSL_set_connect_state(hon_u->ssl.ssl_u);
-
-  c3_i r = SSL_do_handshake(hon_u->ssl.ssl_u);
-  if ( 0 > r ) {
-    _http_conn_cryp_hurr(hon_u, r);
-  }
-  else {
-   hon_u->sat_e = u3_csat_cryp;
-   // TODO: wind state machine
-    // _cttp_ccon_kick(coc_u);
-  }
-
+  SSL_set_accept_state(hon_u->ssl.ssl_u);
   hon_u->sat_e = u3_csat_sing;
-  // TODO: wind state machine
-  // _cttp_ccon_kick(coc_u);
+  _http_conn_kick(hon_u);
 }
 
 static void
@@ -814,15 +805,21 @@ _http_conn_cryp_hurr(u3_hcon* hon_u, int rev)
 
   switch ( err ) {
     default:
+      uL(fprintf(uH, "TLS hurr default\n"));
     // TODO:
       //_cttp_ccon_waste(coc_u, "ssl lost");
       break;
     case SSL_ERROR_NONE:
+      uL(fprintf(uH, "TLS err none\n"));
     case SSL_ERROR_ZERO_RETURN:
+    uL(fprintf(uH, "TLS err zero_return\n"));
       break;
     case SSL_ERROR_WANT_WRITE: //  XX maybe bad
+      uL(fprintf(uH, "TLS hurr want write\n"));
+      _http_conn_cryp_rout(hon_u);
       break;
     case SSL_ERROR_WANT_READ:
+    uL(fprintf(uH, "TLS hurr want read\n"));
       _http_conn_cryp_rout(hon_u);
       break;
     case SSL_ERROR_WANT_CONNECT:
@@ -849,6 +846,33 @@ _http_conn_cryp_hurr(u3_hcon* hon_u, int rev)
   }
 }
 
+/* _cttp_ccon_kick_write_buf(): transmit buffer.
+*/
+static void
+_http_conn_kick_write_buf(u3_hcon* hon_u, uv_buf_t buf_u)
+{
+  _u3_write_t* ruq_u;
+
+  // don't respond to a dead connection
+  if ( uv_is_closing((uv_handle_t*) &(hon_u->wax_u)) ) {
+      free(buf_u.base);
+      return;
+  }
+
+  ruq_u = (_u3_write_t*) c3_malloc(sizeof(_u3_write_t));
+
+  ruq_u->buf_y = (c3_y*)buf_u.base;
+
+  if ( 0 != uv_write(&ruq_u->wri_u,
+                     (uv_stream_t*)&(hon_u->wax_u),
+                     &buf_u, 1,
+                     _http_write_cb) )
+  {
+    uL(fprintf(uH, "respond: ERROR\n"));
+    _http_conn_dead(hon_u);
+  }
+}
+
 /* _cttp_ccon_cryp_rout: write the SSL buffer to the network
  */
 static void
@@ -861,7 +885,7 @@ _http_conn_cryp_rout(u3_hcon* hon_u)
     c3_y* buf_y = c3_malloc(1<<14);
     while ( 0 < (bur_i = BIO_read(hon_u->ssl.wio_u, buf_y, 1<<14)) ) {
       buf_u = uv_buf_init((c3_c*)buf_y, bur_i);
-      _http_respond_buf(hon_u, buf_u);
+      _http_conn_kick_write_buf(hon_u, buf_u);
     }
   }
 }
@@ -1500,6 +1524,9 @@ _http_conn_kick(u3_hcon* hon_u)
       break;
     }
     case u3_csat_sing: {
+      uL(fprintf(uH, "TLS kick (SING)\n"));
+      _http_conn_kick_read_cryp(hon_u);
+      _http_conn_cryp_pull(hon_u);
       // _cttp_ccon_kick_read_cryp(coc_u);
       // _cttp_ccon_cryp_pull(coc_u);
       break;
@@ -1511,6 +1538,8 @@ _http_conn_kick(u3_hcon* hon_u)
       //   _cttp_ccon_kick_write_cryp(coc_u);
       // }
       // _cttp_ccon_cryp_pull(coc_u);
+      uL(fprintf(uH, "TLS kick (CRYP)\n"));
+      _http_conn_cryp_rout(hon_u);
       break;
     }
     case u3_csat_clyr: {
