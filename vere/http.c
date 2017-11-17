@@ -40,7 +40,7 @@
   static void _http_conn_kick_read_cryp(u3_hcon* hon_u);
   static void _http_conn_cryp_pull(u3_hcon* hon_u);
   static void _http_conn_kick_write_buf(u3_hcon* hon_u, uv_buf_t buf_u);
-  static void _http_conn_pars_shov(u3_hcon* hon_u, ssize_t siz_w, void* buf);
+  static void _http_conn_pars_shov(u3_hcon* hon_u, void* buf, ssize_t siz_i);
   static u3_hreq* _http_req_new(u3_hcon* hon_u);
 
 /* _http_alloc(): libuv buffer allocator.
@@ -163,10 +163,13 @@ _http_write_cb(uv_write_t* wri_u, c3_i sas_i)
 static void
 _http_respond_buf(u3_hcon* hon_u, uv_buf_t buf_u)
 {
-  if (!hon_u->htp_u->sec) {
+  if (hon_u->htp_u->sec != c3y) {
+    uL(fprintf(uH, "respond buf clyr\n"));
     _http_conn_kick_write_buf(hon_u, buf_u);
     return;
   }
+
+  uL(fprintf(uH, "respond buf tls\n"));
 
   if ( NULL == hon_u->ssl.ssl_u ) {
     c3_assert(!"ssl_u is null\r\n");
@@ -180,6 +183,9 @@ _http_respond_buf(u3_hcon* hon_u, uv_buf_t buf_u)
     _http_conn_cryp_hurr(hon_u, r);
     _http_conn_cryp_rout(hon_u);
   }
+
+  // XX: HORRIBLE HACK
+  _http_conn_cryp_rout(hon_u);
 }
 
 /* _http_respond_body(): attach response body.
@@ -329,13 +335,13 @@ _http_conn_free(uv_handle_t* han_t)
 static void
 _http_conn_dead(u3_hcon *hon_u)
 {
-  // uL(fprintf(uH, "connection dead: %d\n", hon_u->coq_l));
+  uL(fprintf(uH, "connection dead: %d\n", hon_u->coq_l));
 
   uv_read_stop((uv_stream_t*) &(hon_u->wax_u));
   uv_close((uv_handle_t*) &(hon_u->wax_u), _http_conn_free);
 }
 
-#if 0
+#if 1
 /* _http_req_dump(): dump complete http request.
 */
 static void
@@ -465,6 +471,7 @@ _http_header_value(http_parser* par_u, const c3_c* buf_c, size_t siz_i)
 static c3_i
 _http_headers_complete(http_parser* par_u)
 {
+  uL(fprintf(uH, "http: message complete\n"));
   u3_hreq *req_u = ((u3_hcon*)par_u->data)->ruc_u;
 
   if ( par_u->method >= u3_hmet_other ) {
@@ -504,7 +511,7 @@ _http_message_complete(http_parser* par_u)
   u3_hreq* req_u = hon_u->ruc_u;
 
   hon_u->ruc_u = 0;
-  //_http_req_dump(req_u);
+  _http_req_dump(req_u);
 
   // Queue request for response control.
   {
@@ -603,7 +610,7 @@ _http_conn_read_cb(uv_stream_t* tcp_u,
       _http_conn_dead(hon_u);
     }
     else {
-      _http_conn_pars_shov(hon_u, siz_w, buf_u->base);
+      _http_conn_pars_shov(hon_u, buf_u->base, siz_w);
     }
     if ( buf_u->base ) {
       free(buf_u->base);
@@ -613,19 +620,24 @@ _http_conn_read_cb(uv_stream_t* tcp_u,
 }
 
 /* _http_conn_pars_shov(): shove some bytes into the http parser.
- * TODO: argument order discrepancy with cttp
 */
 static void
-_http_conn_pars_shov(u3_hcon* hon_u, ssize_t siz_w, void* buf)
+_http_conn_pars_shov(u3_hcon* hon_u, void* buf, ssize_t siz_i)
 {
-  if ( siz_w != http_parser_execute(hon_u->par_u,
-                                    &_http_settings,
-                                    (c3_c*)buf,
-                                    siz_w) )
+  uL(fprintf(uH, "http: parse %ld\n", siz_i));
+
+  size_t r;
+
+  if ( siz_i !=
+       (r =  http_parser_execute(hon_u->par_u,
+                                 &_http_settings,
+                                 (c3_c*)buf,
+                                 siz_i)) )
   {
-    uL(fprintf(uH, "http: parse error\n"));
+    uL(fprintf(uH, "http: parse error: %ld\n", r));
     _http_conn_dead(hon_u);
   }
+  uL(fprintf(uH, "http: parse done\n"));
 }
 
 /* _cttp_ccon_kick_read_cryp_cb()
@@ -688,7 +700,7 @@ _http_conn_cryp_pull(u3_hcon* hon_u)
     static c3_c buf[1<<14];
     c3_i r;
     while ( 0 < (r = SSL_read(hon_u->ssl.ssl_u, &buf, sizeof(buf))) ) {
-      _http_conn_pars_shov(hon_u, sizeof(buf), buf);
+      _http_conn_pars_shov(hon_u, buf, r);
     }
     if ( 0 >= r ) {
       _http_conn_cryp_hurr(hon_u, r);
@@ -726,6 +738,7 @@ _http_conn_cryp_pull(u3_hcon* hon_u)
 static void
 _http_conn_new(u3_http *htp_u)
 {
+  uL(fprintf(uH, "http: conn new\n"));
   u3_hcon *hon_u = c3_malloc(sizeof(*hon_u));
   hon_u->sat_e = u3_csat_dead;
 
@@ -750,6 +763,9 @@ _http_conn_new(u3_http *htp_u)
     }
 #endif
 
+    hon_u->sat_e = (htp_u->sec == c3y) ? u3_csat_crop : u3_csat_clyr;
+    _http_conn_kick(hon_u);
+
     hon_u->coq_l = htp_u->coq_l++;
     hon_u->seq_l = 1;
 
@@ -760,9 +776,6 @@ _http_conn_new(u3_http *htp_u)
     hon_u->htp_u = htp_u;
     hon_u->nex_u = htp_u->hon_u;
     htp_u->hon_u = hon_u;
-
-    hon_u->sat_e = (htp_u->sec == c3y) ? u3_csat_crop : u3_csat_clyr;
-    _http_conn_kick(hon_u);
 
     // TODO: move elsewhere
     hon_u->par_u = c3_malloc(sizeof(struct http_parser));
@@ -806,21 +819,23 @@ _http_conn_cryp_hurr(u3_hcon* hon_u, int rev)
   switch ( err ) {
     default:
       uL(fprintf(uH, "TLS hurr default\n"));
-    // TODO:
+      // TODO:
       //_cttp_ccon_waste(coc_u, "ssl lost");
       break;
     case SSL_ERROR_NONE:
       uL(fprintf(uH, "TLS err none\n"));
     case SSL_ERROR_ZERO_RETURN:
-    uL(fprintf(uH, "TLS err zero_return\n"));
       break;
     case SSL_ERROR_WANT_WRITE: //  XX maybe bad
       uL(fprintf(uH, "TLS hurr want write\n"));
+      // TODO: wat do?
       _http_conn_cryp_rout(hon_u);
       break;
     case SSL_ERROR_WANT_READ:
-    uL(fprintf(uH, "TLS hurr want read\n"));
+      uL(fprintf(uH, "TLS hurr want read\n"));
       _http_conn_cryp_rout(hon_u);
+      // TODO: maybe?
+      // _http_conn_cryp_pull(hon_u);
       break;
     case SSL_ERROR_WANT_CONNECT:
       fprintf(stderr, "http: want connect: %p\r\n", hon_u->ssl.ssl_u);
@@ -881,12 +896,10 @@ _http_conn_cryp_rout(u3_hcon* hon_u)
   uv_buf_t buf_u;
   c3_i bur_i;
 
-  {
-    c3_y* buf_y = c3_malloc(1<<14);
-    while ( 0 < (bur_i = BIO_read(hon_u->ssl.wio_u, buf_y, 1<<14)) ) {
-      buf_u = uv_buf_init((c3_c*)buf_y, bur_i);
-      _http_conn_kick_write_buf(hon_u, buf_u);
-    }
+  c3_y* buf_y = c3_malloc(1<<14);
+  while ( 0 < (bur_i = BIO_read(hon_u->ssl.wio_u, buf_y, 1<<14)) ) {
+    buf_u = uv_buf_init((c3_c*)buf_y, bur_i);
+    _http_conn_kick_write_buf(hon_u, buf_u);
   }
 }
 
@@ -1194,6 +1207,8 @@ _http_flush(u3_hcon* hon_u)
     }
     else {
       _http_send_body(req_u, rub_u);
+      // XX: alternate HORRIBLE HACK
+      // _http_conn_cryp_rout(hon_u);
 
       req_u->rub_u = req_u->rub_u->nex_u;
       if ( 0 == req_u->rub_u ) {
@@ -1454,19 +1469,15 @@ u3_http_io_init()
 
     SSL_library_init();
     SSL_load_error_strings();
-
     u3_Host.tls_u = SSL_CTX_new(TLSv1_2_server_method());
-    // SSL_CTX_set_options(u3S, SSL_OP_NO_SSLv2);
+    SSL_CTX_set_options(u3_Host.tls_u, SSL_OP_NO_SSLv2);
     SSL_CTX_set_verify(u3_Host.tls_u, SSL_VERIFY_NONE, NULL);
     SSL_CTX_set_default_verify_paths(u3_Host.tls_u);
-
     SSL_CTX_set_session_cache_mode(u3_Host.tls_u, SSL_SESS_CACHE_OFF);
     SSL_CTX_set_cipher_list(u3_Host.tls_u,
                             "ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:"
                             "ECDH+AES128:DH+AES:ECDH+3DES:DH+3DES:RSA+AESGCM:"
                             "RSA+AES:RSA+3DES:!aNULL:!MD5:!DSS");
-
-
 
     c3_c pub_c[2048];
     c3_c pir_c[2048];
