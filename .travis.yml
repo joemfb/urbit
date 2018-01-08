@@ -1,5 +1,5 @@
 language: c
-script: meson build && cd ./build && ninja
+script: meson -Db_sanitize=address . ./build --buildtype=debugoptimized && cd ./build && ninja
 
 # Uncomment me if this gets annoying
 #
