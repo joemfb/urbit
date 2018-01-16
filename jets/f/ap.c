@@ -1070,6 +1070,7 @@
   _aq_open_l(u3_noun ter,
              u3_noun gen)
   {
+#if 0
     u3_noun pro = _open_in(ter, gen);
 
     if ( u3_none != pro ) {
@@ -1077,6 +1078,9 @@
     } else {
       return _aq_open_n(ter, gen);
     }
+#else
+    return _aq_open_n(ter, gen);
+#endif
   }
 
   u3_noun
