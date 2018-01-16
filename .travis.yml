@@ -1,5 +1,6 @@
 language: c
 script: meson -Db_sanitize=address . ./build --buildtype=debugoptimized && cd ./build && ninja
+compiler: clang
 env:
   - ASAN_OPTIONS=protect_shadow_gap=false
 
