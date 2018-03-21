@@ -189,3 +189,18 @@
 #      else
 #        define c3_rand u3_sist_rand
 #      endif
+
+/* Static assertion
+ */
+#     define ASSERT_CONCAT_(a, b) a##b
+#     define ASSERT_CONCAT(a, b) ASSERT_CONCAT_(a, b)
+      /* This can't be used twice on the same line so ensure if using in headers
+       * that the headers are not included twice (by wrapping in #ifndef...#endif)
+       * Note it doesn't cause an issue when used on same line of separate modules
+       * compiled with gcc -combine -fwhole-program.  */
+#     define STATIC_ASSERT(e,m) \
+        ;enum { ASSERT_CONCAT(assert_line_, __LINE__) = 1/(int)(!!(e)) }
+
+/* Require unsigned char
+ */
+STATIC_ASSERT(( 0 == CHAR_MIN && UCHAR_MAX == CHAR_MAX ), "unsigned char required");

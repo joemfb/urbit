@@ -3,7 +3,6 @@
 */
 #include <stdio.h>
 #include <stdlib.h>
-#include <limits.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
@@ -484,11 +483,6 @@ c3_i
 main(c3_i   argc,
      c3_c** argv)
 {
-  if ( !(0 == CHAR_MIN && UCHAR_MAX == CHAR_MAX) ) {
-    fprintf(stderr, "ERROR: char is signed.\nurbit requires unsigned char\n");
-    exit(1);
-  }
-
   //  Parse options.
   //
   if ( c3n == _main_getopt(argc, argv) ) {
