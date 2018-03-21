@@ -9,6 +9,7 @@
 #    endif
 #    define _GNU_SOURCE
 
+#    include <limits.h>
 
   /** System include files.
   ***
