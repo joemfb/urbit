@@ -2,14 +2,18 @@
 **
 ** This file is in the public domain.
 */
+
+#    ifndef C3_PORTABLE
+#    define C3_PORTABLE
+
+#    include <limits.h>
+
   /** Must be compiled on gcc with C99 support.
   **/
 #    ifndef __GNUC__
 #      error "port me"
 #    endif
 #    define _GNU_SOURCE
-
-#    include <limits.h>
 
   /** System include files.
   ***
@@ -205,3 +209,5 @@
 /* Require unsigned char
  */
 STATIC_ASSERT(( 0 == CHAR_MIN && UCHAR_MAX == CHAR_MAX ), "unsigned char required");
+
+#    endif
