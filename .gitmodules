@@ -13,3 +13,6 @@
 [submodule "subprojects/murmur3"]
 	path = subprojects/murmur3
 	url = https://github.com/urbit/murmur3.git
+[submodule "subprojects/h2o"]
+	path = subprojects/libh2o
+	url = https://github.com/mikolajpp/h2o.git

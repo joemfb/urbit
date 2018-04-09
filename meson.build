@@ -281,7 +281,6 @@ configure_file(input : 'include/config.h.in',
 openssl_dep = dependency('openssl', version: '>=1.0.0')
 curl_dep = dependency('libcurl', version: '>=7.35.0')
 libuv_dep = dependency('libuv', version: '>=1.8.0')
-libh2o_dep = dependency('libh2o', version: '>=0.13.3')
 
 if(legacy_meson)
   gmp_dep = find_library('gmp')
@@ -298,13 +297,14 @@ urbitscrypt_dep = dependency('libscrypt', version: '>=0.1.21', fallback: ['libsc
 ed25519_dep = dependency('ed25519', version: '>=0.1.0', fallback: ['ed25519', 'ed25519_dep'])
 murmur3_dep = dependency('murmur3', version: '>=0.1.0', fallback: ['murmur3', 'murmur3_dep'])
 softfloat3_dep = dependency('softfloat3', version: '>=3.0.0', fallback: ['softfloat3', 'softfloat3_dep'])
+libh2o_dep = dependency('libh2o', version: '=2.2.3', fallback: ['libh2o', 'libh2o_dep'])
 
 
 opt_flags = []
 if get_option('debug')
-  opt_flags = ['-g']
+  opt_flags = ['-g','-funsigned-char', '-ffast-math']
 else
-  opt_flags = ['-O3']
+  opt_flags = ['-O3','-funsigned-char', '-ffast-math']
 endif
 
 executable('urbit',
