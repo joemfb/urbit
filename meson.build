@@ -313,6 +313,8 @@ else
   opt_flags = ['-O3']
 endif
 
+wslay_dep = dependency('libwslay')
+
 executable('urbit',
 sources : sources,
 include_directories : incdir,
@@ -322,6 +324,7 @@ dependencies: [openssl_dep,
                curl_dep,
                libuv_dep,
                libh2o_dep,
+               wslay_dep,
                cmark_dep,
                gmp_dep,
                sigsegv_dep,
