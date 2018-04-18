@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <openssl/ssl.h>
 #include <h2o.h>
+#include <h2o/websocket.h>
 #include "all.h"
 #include "vere/vere.h"
 
@@ -358,11 +359,36 @@ struct h2o_con_wrap {                 //  see private st_h2o_http1_conn_t
   } *suv_u;
 };
 
+static void
+on_ws_message(h2o_websocket_conn_t *conn,
+              const struct wslay_event_on_msg_recv_arg *arg)
+{
+  if ( 0 == arg ) {
+    h2o_websocket_close(conn);
+    return;
+  }
+
+  if ( !wslay_is_ctrl_frame(arg->opcode) ) {
+    struct wslay_event_msg msgarg = {arg->opcode, arg->msg, arg->msg_length};
+    wslay_event_queue_msg(conn->ws_ctx, &msgarg);
+  }
+}
+
 /* _http_rec_accept(); handle incoming http request from h2o.
 */
 static c3_i
 _http_rec_accept(h2o_handler_t* han_u, h2o_req_t* rec_u)
 {
+  {
+    const c3_c* cik_c;
+
+    if ( (0 == h2o_is_websocket_handshake(rec_u, &cik_c)) && (0 != cik_c) ) {
+      // XX use return, pass data, wrap struct, etc.
+      h2o_upgrade_to_websocket(rec_u, cik_c, 0, on_ws_message);
+      return 0;
+    }
+  }
+
   u3_weak req = _http_rec_to_httq(rec_u);
 
   if ( u3_none == req ) {
