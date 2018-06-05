@@ -829,13 +829,16 @@ _cttp_creq_resolve_cb(uv_getaddrinfo_t* adr_u,
   u3_creq* ceq_u = adr_u->data;
 
   if ( u3_csat_quit == ceq_u->sat_e ) {
+    // XX leaks adr_u/aif_u
     return _cttp_creq_quit(ceq_u);;
   }
 
   if ( 0 != sas_i ) {
+    // XX leaks adr_u/aif_u
     return _cttp_creq_fail(ceq_u, uv_strerror(sas_i));
   }
 
+  // XX traverse struct a la _ames_czar_cb
   ceq_u->ipf_w = ntohl(((struct sockaddr_in *)aif_u->ai_addr)->sin_addr.s_addr);
   ceq_u->ipf_c = _cttp_creq_ip(ceq_u->ipf_w);
 
@@ -864,6 +867,7 @@ _cttp_creq_resolve(u3_creq* ceq_u)
   hin_u.ai_socktype = SOCK_STREAM;
   hin_u.ai_protocol = IPPROTO_TCP;
 
+  // XX is this necessary?
   c3_c* por_c = ceq_u->por_c ? ceq_u->por_c :
                 ( c3y == ceq_u->sec ) ? "443" : "80";
 
