@@ -50,6 +50,7 @@
 #     include <machine/endian.h>
 #     include <machine/byte_order.h>
 #     include <stdio.h>
+#     include <sys/syslimits.h>
 #     include <sys/time.h>
 #     include <sys/resource.h>
 #     include <sys/mman.h>

@@ -1390,9 +1390,7 @@ _cm_limits(void)
   {
     ret_i = getrlimit(RLIMIT_STACK, &rlm);
     c3_assert(0 == ret_i);
-    rlm.rlim_cur = (rlm.rlim_max > (65536 << 10)) 
-                          ? (65536 << 10)
-                          : rlm.rlim_max;
+    rlm.rlim_cur = c3_min(rlm.rlim_max, (65536 << 10));
     if ( 0 != setrlimit(RLIMIT_STACK, &rlm) ) {
       perror("stack");
       exit(1);
@@ -1404,7 +1402,11 @@ _cm_limits(void)
   {
     ret_i = getrlimit(RLIMIT_NOFILE, &rlm);
     c3_assert(0 == ret_i);
-    rlm.rlim_cur = 10240; // default OSX max, not in rlim_max irritatingly
+#   if defined(U3_OS_osx)
+      rlm.rlim_cur = OPEN_MAX;
+#   else
+      rlm.rlim_cur = rlm.rlim_max;
+#   endif
     if ( 0 != setrlimit(RLIMIT_NOFILE, &rlm) ) {
       // perror("file limit");
       //  no exit, not a critical limit
