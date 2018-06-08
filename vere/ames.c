@@ -222,6 +222,7 @@ _ames_czar(u3_pact* pac_u, c3_c* bos_c)
        (now - sam_u->imp_t[pac_u->imp_y]) > 300 ) { /* 5 minute TTL */
     u3_noun  nam = u3dc("scot", 'p', pac_u->imp_y);
     c3_c*  nam_c = u3r_string(nam);
+    // XX remove extra byte for '~'
     pac_u->dns_c = c3_malloc(1 + strlen(bos_c) + 1 + strlen(nam_c));
 
     snprintf(pac_u->dns_c, 256, "%s.%s", nam_c + 1, bos_c);
@@ -477,6 +478,7 @@ u3_ames_io_exit()
 {
   u3_ames* sam_u = &u3_Host.sam_u;
 
+  // XX close wax_u instead
   uv_close(&sam_u->had_u, 0);
 }
 
